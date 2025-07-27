@@ -246,13 +246,20 @@ def prepare_ml_datasets(**context):
         }
     }
     
+    # Convert DataFrames and Series to JSON-serializable format for XCom
     return {
-        'X_train': X_train,
-        'X_test': X_test,
-        'y_train': y_train,
-        'y_test': y_test,
-        'scaler': scaler,
-        'metadata': metadata
+        'X_train': X_train.to_dict('records') if hasattr(X_train, 'to_dict') else X_train,
+        'X_test': X_test.to_dict('records') if hasattr(X_test, 'to_dict') else X_test,
+        'y_train': y_train.tolist() if hasattr(y_train, 'tolist') else y_train,
+        'y_test': y_test.tolist() if hasattr(y_test, 'tolist') else y_test,
+        'scaler': None,  # Scaler will be saved separately
+        'metadata': metadata,
+        'shapes': {
+            'X_train': X_train.shape,
+            'X_test': X_test.shape,
+            'y_train': (len(y_train),),
+            'y_test': (len(y_test),)
+        }
     }
 
 def save_prepared_data(**context):
@@ -262,14 +269,49 @@ def save_prepared_data(**context):
     data = ti.xcom_pull(task_ids='prepare_ml_datasets')
     execution_date = context['ds']
     
+    # Get original data to save
+    df = ti.xcom_pull(task_ids='handle_missing_values')
+    
+    # Recreate the preprocessing steps to get the actual data
+    feature_cols = [col for col in df.columns if col not in [
+        'customer_id', 'timestamp', 'churn_probability'
+    ]]
+    
+    numerical_features = df[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
+    categorical_features = df[feature_cols].select_dtypes(include=['object', 'category']).columns.tolist()
+    
+    df_encoded = df.copy()
+    df_encoded = pd.get_dummies(
+        df_encoded, 
+        columns=categorical_features,
+        prefix=categorical_features,
+        drop_first=True
+    )
+    
+    scaler = StandardScaler()
+    df_encoded[numerical_features] = scaler.fit_transform(df_encoded[numerical_features])
+    
+    feature_cols_encoded = [col for col in df_encoded.columns if col not in [
+        'customer_id', 'timestamp', 'churn_probability'
+    ]]
+    
+    X = df_encoded[feature_cols_encoded]
+    y = df_encoded['churn_probability']
+    
+    # Split the data
+    from sklearn.model_selection import train_test_split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=(y > 0.5)
+    )
+    
     s3_hook = S3Hook(aws_conn_id='minio_s3')
     
     # Save each dataset
     datasets = {
-        'X_train': data['X_train'],
-        'X_test': data['X_test'],
-        'y_train': data['y_train'],
-        'y_test': data['y_test']
+        'X_train': X_train,
+        'X_test': X_test,
+        'y_train': y_train,
+        'y_test': y_test
     }
     
     saved_paths = {}
@@ -308,7 +350,7 @@ def save_prepared_data(**context):
     # Save scaler
     import pickle
     scaler_buffer = io.BytesIO()
-    pickle.dump(data['scaler'], scaler_buffer)
+    pickle.dump(scaler, scaler_buffer)
     scaler_key = f"prepared_data/{execution_date}/scaler.pkl"
     s3_hook.load_bytes(
         bytes_data=scaler_buffer.getvalue(),
