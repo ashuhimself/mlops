@@ -35,17 +35,44 @@ default_args = {
 }
 
 def load_raw_data(**context):
-    """Load raw data from S3 for the given execution date."""
-    
-    execution_date = context['ds']
-    year, month, day = execution_date.split('-')
+    """Load the latest raw data from S3."""
     
     # Initialize S3 hook
     s3_hook = S3Hook(aws_conn_id='minio_s3')
     
-    # Read raw data
-    key = f"raw_data/year={year}/month={month}/day={day}/customer_data_{execution_date}.parquet"
+    # Try to get the latest raw data path from Variable
+    try:
+        latest_data_info = Variable.get("latest_raw_data", deserialize_json=True)
+        data_path = latest_data_info['path']
+        key = data_path.replace('s3://features/', '')
+        
+        print(f"Loading latest data from: {data_path}")
+    except:
+        # Fallback: find the most recent file
+        print("No latest data variable found, searching for most recent file...")
+        
+        # List all parquet files in raw_data
+        client = s3_hook.get_conn()
+        response = client.list_objects_v2(
+            Bucket='features',
+            Prefix='raw_data/',
+            Delimiter='/'
+        )
+        
+        all_files = []
+        for obj in response.get('Contents', []):
+            if obj['Key'].endswith('.parquet') and 'customer_data' in obj['Key']:
+                all_files.append((obj['Key'], obj['LastModified']))
+        
+        if not all_files:
+            raise Exception("No raw data files found in S3")
+        
+        # Get the most recent file
+        all_files.sort(key=lambda x: x[1], reverse=True)
+        key = all_files[0][0]
+        print(f"Found most recent file: {key}")
     
+    # Load the data
     try:
         obj = s3_hook.get_key(key=key, bucket_name='features')
         buffer = io.BytesIO(obj.get()['Body'].read())
@@ -53,6 +80,7 @@ def load_raw_data(**context):
         
         print(f"Loaded data from s3://features/{key}")
         print(f"Data shape: {data.shape}")
+        print(f"Columns: {data.columns.tolist()}")
         
         return {
             'data': data,
@@ -383,11 +411,11 @@ def save_prepared_data(**context):
 with DAG(
     '02_data_preparation_pipeline',
     default_args=default_args,
-    description='Prepare data for ML training with feature engineering',
-    schedule='@daily',
+    description='Independent data preparation - loads latest available data',
+    schedule=None,  # Manual trigger only
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=['data-preparation', 'feature-engineering', 'ml-pipeline'],
+    tags=['data-preparation', 'feature-engineering', 'independent', 'manual'],
     doc_md=__doc__
 ) as dag:
     
@@ -431,6 +459,5 @@ with DAG(
         doc_md="Trigger model training pipeline with new data"
     )
     
-    # Define dependencies
-    load_task >> engineer_task >> handle_missing_task >> prepare_task >> save_task
-    # Uncomment to auto-trigger training: >> trigger_training 
+    # Define dependencies - No external dependencies, all tasks run sequentially
+    load_task >> engineer_task >> handle_missing_task >> prepare_task >> save_task 
