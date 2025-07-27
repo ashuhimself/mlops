@@ -18,8 +18,12 @@ from sklearn.model_selection import cross_val_score
 from airflow import DAG
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.models import Variable
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+try:
+    from airflow.sdk import Variable
+except ImportError:
+    # Fallback for older Airflow versions
+    from airflow.models import Variable
 import json
 import io
 import pickle
@@ -68,6 +72,12 @@ def setup_mlflow():
 def check_for_new_data(**context):
     """Check if new prepared data is available for training."""
     
+    # Check if this is a manual trigger
+    run_id = context['dag_run'].run_id
+    if run_id.startswith('manual_'):
+        print("Manual trigger detected. Proceeding with training.")
+        return 'load_prepared_data'
+    
     try:
         # Get latest prepared data info
         latest_data = Variable.get("latest_prepared_data", deserialize_json=True)
@@ -88,7 +98,9 @@ def check_for_new_data(**context):
     
     except Exception as e:
         print(f"Error checking for new data: {e}")
-        return 'skip_training'
+        # If there's an error, proceed with training instead of skipping
+        print("Proceeding with training due to error in check")
+        return 'load_prepared_data'
 
 def load_prepared_data(**context):
     """Load prepared datasets from S3."""
@@ -127,33 +139,59 @@ def load_prepared_data(**context):
     metadata_str = s3_hook.read_key(key=metadata_key, bucket_name='features')
     metadata = json.loads(metadata_str)
     
+    # Don't return actual data through XCom, just paths and metadata
     return {
-        'X_train': datasets['X_train'],
-        'X_test': datasets['X_test'],
-        'y_train': datasets['y_train'],
-        'y_test': datasets['y_test'],
-        'scaler': scaler,
+        'paths': paths,
         'metadata': metadata,
-        'data_info': data_info
+        'data_info': data_info,
+        'shapes': {
+            'X_train': datasets['X_train'].shape,
+            'X_test': datasets['X_test'].shape,
+            'y_train': datasets['y_train'].shape,
+            'y_test': datasets['y_test'].shape
+        }
     }
 
 def train_baseline_model(**context):
     """Train a baseline linear regression model."""
     
     ti = context['task_instance']
-    data = ti.xcom_pull(task_ids='load_prepared_data')
+    data_info = ti.xcom_pull(task_ids='load_prepared_data')
+    paths = data_info['paths']
     
-    X_train = data['X_train']
-    X_test = data['X_test']
-    y_train = data['y_train']
-    y_test = data['y_test']
+    # Load data from S3
+    s3_hook = S3Hook(aws_conn_id='minio_s3')
+    
+    # Load X_train
+    key = paths['X_train'].replace('s3://features/', '')
+    obj = s3_hook.get_key(key=key, bucket_name='features')
+    buffer = io.BytesIO(obj.get()['Body'].read())
+    X_train = pd.read_parquet(buffer)
+    
+    # Load X_test
+    key = paths['X_test'].replace('s3://features/', '')
+    obj = s3_hook.get_key(key=key, bucket_name='features')
+    buffer = io.BytesIO(obj.get()['Body'].read())
+    X_test = pd.read_parquet(buffer)
+    
+    # Load y_train
+    key = paths['y_train'].replace('s3://features/', '')
+    obj = s3_hook.get_key(key=key, bucket_name='features')
+    buffer = io.BytesIO(obj.get()['Body'].read())
+    y_train = pd.read_parquet(buffer).iloc[:, 0]
+    
+    # Load y_test
+    key = paths['y_test'].replace('s3://features/', '')
+    obj = s3_hook.get_key(key=key, bucket_name='features')
+    buffer = io.BytesIO(obj.get()['Body'].read())
+    y_test = pd.read_parquet(buffer).iloc[:, 0]
     
     experiment_id = setup_mlflow()
     
     with mlflow.start_run(experiment_id=experiment_id, run_name="baseline_linear_regression"):
         # Log data info
         mlflow.log_param("model_type", "linear_regression")
-        mlflow.log_param("data_date", data['data_info']['execution_date'])
+        mlflow.log_param("data_date", data_info['data_info']['execution_date'])
         mlflow.log_param("n_features", X_train.shape[1])
         mlflow.log_param("n_train_samples", len(X_train))
         
@@ -202,12 +240,29 @@ def train_random_forest(**context):
     """Train a Random Forest model with hyperparameter tuning."""
     
     ti = context['task_instance']
-    data = ti.xcom_pull(task_ids='load_prepared_data')
+    data_info = ti.xcom_pull(task_ids='load_prepared_data')
+    paths = data_info['paths']
     
-    X_train = data['X_train']
-    X_test = data['X_test']
-    y_train = data['y_train']
-    y_test = data['y_test']
+    # Load data from S3
+    s3_hook = S3Hook(aws_conn_id='minio_s3')
+    
+    # Load datasets
+    datasets = {}
+    for name in ['X_train', 'X_test', 'y_train', 'y_test']:
+        key = paths[name].replace('s3://features/', '')
+        obj = s3_hook.get_key(key=key, bucket_name='features')
+        buffer = io.BytesIO(obj.get()['Body'].read())
+        df = pd.read_parquet(buffer)
+        
+        if name.startswith('y_'):
+            datasets[name] = df.iloc[:, 0]
+        else:
+            datasets[name] = df
+    
+    X_train = datasets['X_train']
+    X_test = datasets['X_test']
+    y_train = datasets['y_train']
+    y_test = datasets['y_test']
     
     experiment_id = setup_mlflow()
     
@@ -226,7 +281,7 @@ def train_random_forest(**context):
         with mlflow.start_run(experiment_id=experiment_id, run_name=f"random_forest_{config['n_estimators']}"):
             # Log parameters
             mlflow.log_param("model_type", "random_forest")
-            mlflow.log_param("data_date", data['data_info']['execution_date'])
+            mlflow.log_param("data_date", data_info['data_info']['execution_date'])
             mlflow.log_param("n_features", X_train.shape[1])
             mlflow.log_param("n_train_samples", len(X_train))
             
@@ -304,19 +359,36 @@ def train_gradient_boosting(**context):
     """Train a Gradient Boosting model."""
     
     ti = context['task_instance']
-    data = ti.xcom_pull(task_ids='load_prepared_data')
+    data_info = ti.xcom_pull(task_ids='load_prepared_data')
+    paths = data_info['paths']
     
-    X_train = data['X_train']
-    X_test = data['X_test']
-    y_train = data['y_train']
-    y_test = data['y_test']
+    # Load data from S3
+    s3_hook = S3Hook(aws_conn_id='minio_s3')
+    
+    # Load datasets
+    datasets = {}
+    for name in ['X_train', 'X_test', 'y_train', 'y_test']:
+        key = paths[name].replace('s3://features/', '')
+        obj = s3_hook.get_key(key=key, bucket_name='features')
+        buffer = io.BytesIO(obj.get()['Body'].read())
+        df = pd.read_parquet(buffer)
+        
+        if name.startswith('y_'):
+            datasets[name] = df.iloc[:, 0]
+        else:
+            datasets[name] = df
+    
+    X_train = datasets['X_train']
+    X_test = datasets['X_test']
+    y_train = datasets['y_train']
+    y_test = datasets['y_test']
     
     experiment_id = setup_mlflow()
     
     with mlflow.start_run(experiment_id=experiment_id, run_name="gradient_boosting"):
         # Log parameters
         mlflow.log_param("model_type", "gradient_boosting")
-        mlflow.log_param("data_date", data['data_info']['execution_date'])
+        mlflow.log_param("data_date", data_info['data_info']['execution_date'])
         mlflow.log_param("n_features", X_train.shape[1])
         mlflow.log_param("n_train_samples", len(X_train))
         
@@ -430,7 +502,8 @@ def select_best_model(**context):
         print(f"Error registering model: {e}")
     
     # Update last trained data
-    data_info = ti.xcom_pull(task_ids='load_prepared_data')['data_info']
+    loaded_data = ti.xcom_pull(task_ids='load_prepared_data')
+    data_info = loaded_data['data_info']
     Variable.set(
         key="last_trained_data",
         value=json.dumps({

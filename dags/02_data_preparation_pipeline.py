@@ -388,15 +388,6 @@ with DAG(
 ) as dag:
     
     # Wait for data generation to complete
-    wait_for_data = ExternalTaskSensor(
-        task_id='wait_for_data_generation',
-        external_dag_id='01_data_generation_pipeline',
-        external_task_id='save_to_s3',
-        mode='poke',
-        timeout=300,
-        poke_interval=60,
-        doc_md="Wait for data generation pipeline to complete"
-    )
     
     load_task = PythonOperator(
         task_id='load_raw_data',
@@ -437,4 +428,5 @@ with DAG(
     )
     
     # Define dependencies
-    wait_for_data >> load_task >> engineer_task >> handle_missing_task >> prepare_task >> save_task >> trigger_training 
+    load_task >> engineer_task >> handle_missing_task >> prepare_task >> save_task
+    # Uncomment to auto-trigger training: >> trigger_training 
