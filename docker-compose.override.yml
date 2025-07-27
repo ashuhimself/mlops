@@ -81,10 +81,25 @@ services:
     image: jupyter/datascience-notebook:latest
     environment:
       - JUPYTER_TOKEN=local_dev_token
+      - JUPYTER_ENABLE_LAB=yes
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      - AWS_ENDPOINT_URL=http://minio:9000
+      - MLFLOW_TRACKING_URI=http://mlflow:5001
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
     ports:
       - "8888:8888"
     volumes:
       - ./notebooks:/home/jovyan/work
+      - ./feature_repo:/home/jovyan/work/feature_repo:ro
+      - ./src:/home/jovyan/work/src
+    command: >
+      start-notebook.sh
+      --ServerApp.token='local_dev_token'
+      --ServerApp.password=''
+      --ServerApp.allow_origin='*'
+      --ServerApp.base_url='/'
+      --no-browser
     networks:
       - mlops_e52901_airflow
 
