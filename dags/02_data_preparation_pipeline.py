@@ -15,8 +15,12 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.sensors.external_task import ExternalTaskSensor
-from airflow.models import Variable
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+try:
+    from airflow.sdk import Variable
+except ImportError:
+    # Fallback for older Airflow versions
+    from airflow.models import Variable
 import json
 import io
 

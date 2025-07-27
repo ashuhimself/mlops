@@ -11,7 +11,11 @@ import numpy as np
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.models import Variable
+try:
+    from airflow.sdk import Variable
+except ImportError:
+    # Fallback for older Airflow versions
+    from airflow.models import Variable
 
 default_args = {
     'owner': 'data-team',

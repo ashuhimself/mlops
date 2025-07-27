@@ -13,7 +13,11 @@ import mlflow.sklearn
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.models import Variable
+try:
+    from airflow.sdk import Variable
+except ImportError:
+    # Fallback for older Airflow versions
+    from airflow.models import Variable
 import json
 import io
 import pickle
@@ -29,7 +33,7 @@ default_args = {
 }
 
 # Configure MLflow
-MLFLOW_TRACKING_URI = Variable.get("mlflow_tracking_uri", default_var="http://mlflow:5001")
+MLFLOW_TRACKING_URI = Variable.get("mlflow_tracking_uri", default="http://mlflow:5001")
 MODEL_NAME = "churn_predictor"
 
 def load_model_from_registry(**context):
@@ -38,24 +42,29 @@ def load_model_from_registry(**context):
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     client = mlflow.tracking.MlflowClient()
     
-    # Get latest model version in staging or production
-    versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
-    if not versions:
-        versions = client.get_latest_versions(MODEL_NAME, stages=["Staging"])
+    # Get latest model version (stages are deprecated, use tags)
+    all_versions = client.search_model_versions(f"name='{MODEL_NAME}'")
     
-    if not versions:
-        raise ValueError(f"No staging/production versions found for model {MODEL_NAME}")
+    # Sort by version number to get the latest
+    if all_versions:
+        latest_version = max(all_versions, key=lambda x: int(x.version))
+    else:
+        raise ValueError(f"No versions found for model {MODEL_NAME}")
     
-    latest_version = versions[0]
     model_uri = f"models:/{MODEL_NAME}/{latest_version.version}"
     
-    print(f"Loading model {MODEL_NAME} version {latest_version.version} (stage: {latest_version.current_stage})")
+    # Get deployment status from tags
+    deployment_status = "unknown"
+    if hasattr(latest_version, 'tags') and latest_version.tags:
+        deployment_status = latest_version.tags.get('deployment_status', 'unknown')
+    
+    print(f"Loading model {MODEL_NAME} version {latest_version.version} (status: {deployment_status})")
     model = mlflow.sklearn.load_model(model_uri)
     
     return {
         'model': model,
         'version': latest_version.version,
-        'stage': latest_version.current_stage
+        'stage': deployment_status
     }
 
 def load_new_customers(**context):

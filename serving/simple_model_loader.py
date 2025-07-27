@@ -14,20 +14,27 @@ import os
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-def load_latest_model(model_name="churn_predictor", stage="Staging"):
-    """Load the latest model from a specific stage."""
+def load_latest_model(model_name="churn_predictor", version="latest"):
+    """Load the latest model or a specific version."""
     
     client = mlflow.tracking.MlflowClient()
     
-    # Get latest version for the stage
-    versions = client.get_latest_versions(model_name, stages=[stage])
+    if version == "latest":
+        # Get all versions and pick the latest
+        all_versions = client.search_model_versions(f"name='{model_name}'")
+        if not all_versions:
+            print(f"No models found for {model_name}")
+            return None, None
+        latest_version = max(all_versions, key=lambda x: int(x.version))
+    else:
+        # Get specific version
+        try:
+            latest_version = client.get_model_version(model_name, version)
+        except:
+            print(f"Version {version} not found for {model_name}")
+            return None, None
     
-    if not versions:
-        print(f"No {stage} model found for {model_name}")
-        return None, None
-    
-    latest_version = versions[0]
-    print(f"Loading {model_name} version {latest_version.version} from {stage}")
+    print(f"Loading {model_name} version {latest_version.version}")
     
     # Load the model
     model_uri = f"models:/{model_name}/{latest_version.version}"
@@ -110,7 +117,7 @@ def main():
     print("=" * 50)
     
     # Load model
-    model, version_info = load_latest_model(stage="Staging")
+    model, version_info = load_latest_model(version="latest")
     
     if model is None:
         print("❌ Failed to load model. Please ensure a model is trained and registered.")
@@ -118,8 +125,9 @@ def main():
     
     print(f"\n✅ Model loaded successfully!")
     print(f"   Version: {version_info.version}")
-    print(f"   Stage: {version_info.current_stage}")
     print(f"   Created: {version_info.creation_timestamp}")
+    if hasattr(version_info, 'tags') and version_info.tags:
+        print(f"   Tags: {version_info.tags}")
     
     # Single prediction example
     print("\n📊 Making prediction for a single customer...")
@@ -139,7 +147,7 @@ def main():
     print("\n💡 Other loading options:")
     print("   - Load specific version: mlflow.sklearn.load_model('models:/churn_predictor/1')")
     print("   - Load from run: mlflow.sklearn.load_model('runs:/<run_id>/model')")
-    print("   - Load production: client.get_latest_versions(model_name, stages=['Production'])")
+    print("   - Search by tags: client.search_model_versions(\"name='churn_predictor' and tags.deployment_status='production'\")")
 
 if __name__ == "__main__":
     main() 

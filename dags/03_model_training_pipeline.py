@@ -40,7 +40,7 @@ default_args = {
 }
 
 # Configure MLflow
-MLFLOW_TRACKING_URI = Variable.get("mlflow_tracking_uri", default_var="http://mlflow:5001")
+MLFLOW_TRACKING_URI = Variable.get("mlflow_tracking_uri", default="http://mlflow:5001")
 EXPERIMENT_NAME = "customer_churn_prediction"
 MODEL_NAME = "churn_predictor"
 
@@ -51,7 +51,7 @@ def setup_mlflow():
     # Set S3 credentials for artifact storage
     os.environ['AWS_ACCESS_KEY_ID'] = 'minio'
     os.environ['AWS_SECRET_ACCESS_KEY'] = 'minio123'
-    os.environ['MLFLOW_S3_ENDPOINT_URL'] = Variable.get("minio_endpoint", default_var="http://minio:9000")
+    os.environ['MLFLOW_S3_ENDPOINT_URL'] = Variable.get("minio_endpoint", default="http://minio:9000")
     
     # Create or get experiment
     experiment = mlflow.get_experiment_by_name(EXPERIMENT_NAME)
@@ -83,7 +83,7 @@ def check_for_new_data(**context):
         latest_data = Variable.get("latest_prepared_data", deserialize_json=True)
         
         # Get last trained data info
-        last_trained = Variable.get("last_trained_data", default_var=None, deserialize_json=True)
+        last_trained = Variable.get("last_trained_data", default=None, deserialize_json=True)
         
         if last_trained is None:
             print("No previous training found. Proceeding with training.")
@@ -485,17 +485,20 @@ def select_best_model(**context):
             run_id=best_model['run_id'],
             tags={
                 "model_type": best_model['model_type'],
-                "test_rmse": str(best_model['test_rmse'])
+                "test_rmse": str(best_model['test_rmse']),
+                "stage": "staging",  # Use tags instead of stages
+                "status": "ready"
             }
         )
         
         print(f"Registered model version: {model_version.version}")
         
-        # Transition to staging
-        client.transition_model_version_stage(
+        # Add deployment tags instead of using deprecated stages
+        client.set_model_version_tag(
             name=MODEL_NAME,
             version=model_version.version,
-            stage="Staging"
+            key="deployment_status",
+            value="staging"
         )
         
     except Exception as e:
