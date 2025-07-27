@@ -12,9 +12,7 @@ services:
     volumes:
       - minio_data:/data
     networks:
-      default:
-        aliases:
-          - minio
+      - mlops_e52901_airflow
 
   # MinIO client for bucket creation
   mc:
@@ -33,6 +31,8 @@ services:
       echo 'Buckets created successfully' &&
       tail -f /dev/null
       "
+    networks:
+      - mlops_e52901_airflow
 
   # MLflow server
   mlflow:
@@ -59,6 +59,8 @@ services:
       echo 'PostgreSQL is ready!' &&
       mlflow server --host 0.0.0.0 --port 5001 --backend-store-uri postgresql://mlflow:mlflow@mlflow-db:5432/mlflow --default-artifact-root s3://mlflow
       "
+    networks:
+      - mlops_e52901_airflow
 
   # Separate PostgreSQL for MLflow
   mlflow-db:
@@ -71,6 +73,8 @@ services:
       - "5433:5432"
     volumes:
       - mlflow_postgres_data:/var/lib/postgresql/data
+    networks:
+      - mlops_e52901_airflow
 
   # Jupyter Lab
   jupyter:
@@ -81,7 +85,13 @@ services:
       - "8888:8888"
     volumes:
       - ./notebooks:/home/jovyan/work
+    networks:
+      - mlops_e52901_airflow
 
 volumes:
   minio_data:
-  mlflow_postgres_data: 
+  mlflow_postgres_data:
+
+networks:
+  mlops_e52901_airflow:
+    external: true 

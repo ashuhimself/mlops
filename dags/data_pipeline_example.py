@@ -111,12 +111,13 @@ def create_feature_store_batch(**context):
     })
     
     # Save as parquet for feature store
-    parquet_buffer = StringIO()
+    import io
+    parquet_buffer = io.BytesIO()
     features_df.to_parquet(parquet_buffer, index=False, engine='pyarrow')
     
     feature_key = f"feature_store/category_features_{context['ds']}.parquet"
     s3_hook.load_bytes(
-        bytes_data=parquet_buffer.getvalue().encode(),
+        bytes_data=parquet_buffer.getvalue(),
         key=feature_key,
         bucket_name='features',
         replace=True
@@ -140,19 +141,16 @@ with DAG(
     generate_task = PythonOperator(
         task_id='generate_data',
         python_callable=generate_sample_data,
-        provide_context=True,
     )
     
     process_task = PythonOperator(
         task_id='process_data',
         python_callable=process_data,
-        provide_context=True,
     )
     
     feature_store_task = PythonOperator(
         task_id='create_features',
         python_callable=create_feature_store_batch,
-        provide_context=True,
     )
     
     # Define task dependencies

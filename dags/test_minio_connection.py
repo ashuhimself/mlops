@@ -21,8 +21,11 @@ def test_minio_connection(**context):
     # Get the S3 hook using our MinIO connection
     s3_hook = S3Hook(aws_conn_id='minio_s3')
     
-    # List all buckets
-    buckets = s3_hook.list_buckets()
+    # Get the boto3 client to list buckets
+    client = s3_hook.get_conn()
+    response = client.list_buckets()
+    buckets = response.get('Buckets', [])
+    
     print(f"Found {len(buckets)} buckets:")
     for bucket in buckets:
         print(f"  - {bucket['Name']}")
@@ -97,13 +100,11 @@ with DAG(
     test_minio_task = PythonOperator(
         task_id='test_minio_s3_connection',
         python_callable=test_minio_connection,
-        provide_context=True,
     )
     
     test_mlflow_task = PythonOperator(
         task_id='test_mlflow_connection',
         python_callable=test_mlflow_connection,
-        provide_context=True,
     )
     
     # Test MinIO first, then MLflow
