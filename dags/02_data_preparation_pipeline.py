@@ -16,6 +16,7 @@ from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.sensors.external_task import ExternalTaskSensor
 from airflow.models import Variable
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 import json
 import io
 
@@ -385,5 +386,13 @@ with DAG(
         doc_md="Save prepared data to S3"
     )
     
+    # Trigger model training
+    trigger_training = TriggerDagRunOperator(
+        task_id='trigger_model_training',
+        trigger_dag_id='03_model_training_pipeline',
+        wait_for_completion=False,
+        doc_md="Trigger model training pipeline with new data"
+    )
+    
     # Define dependencies
-    wait_for_data >> load_task >> engineer_task >> handle_missing_task >> prepare_task >> save_task 
+    wait_for_data >> load_task >> engineer_task >> handle_missing_task >> prepare_task >> save_task >> trigger_training 
