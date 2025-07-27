@@ -1,0 +1,16 @@
+# ML frameworks
+mlflow
+bentoml
+feast  # Using local provider version
+pandas<2
+scikit-learn
+pyarrow
+boto3
+
+# ML monitoring
+# evidently  # Skip due to compatibility issues
+# whylogs    # Skip for now
+
+# Airflow providers
+apache-airflow-providers-amazon
+apache-airflow-providers-postgres

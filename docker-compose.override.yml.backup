@@ -1,0 +1,161 @@
+version: '3.8'
+
+services:
+  webserver:
+    environment:
+      - AIRFLOW_CONN_S3_MINIO=s3://minio:minio123@?endpoint_url=http%3A%2F%2Fminio%3A9000
+      - AIRFLOW_CONN_POSTGRES_MLFLOW=postgresql://mlflow:mlflow@postgres:5432/mlflow
+      - AIRFLOW_CONN_MLFLOW_DEFAULT=http://mlflow:5001
+      - MLFLOW_TRACKING_URI=http://mlflow:5001
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+    depends_on:
+      - postgres
+      - minio
+      - mlflow
+
+  scheduler:
+    environment:
+      - AIRFLOW_CONN_S3_MINIO=s3://minio:minio123@?endpoint_url=http%3A%2F%2Fminio%3A9000
+      - AIRFLOW_CONN_POSTGRES_MLFLOW=postgresql://mlflow:mlflow@postgres:5432/mlflow
+      - AIRFLOW_CONN_MLFLOW_DEFAULT=http://mlflow:5001
+      - MLFLOW_TRACKING_URI=http://mlflow:5001
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+    depends_on:
+      - postgres
+      - minio
+      - mlflow
+
+  triggerer:
+    environment:
+      - AIRFLOW_CONN_S3_MINIO=s3://minio:minio123@?endpoint_url=http%3A%2F%2Fminio%3A9000
+      - AIRFLOW_CONN_POSTGRES_MLFLOW=postgresql://mlflow:mlflow@postgres:5432/mlflow
+      - AIRFLOW_CONN_MLFLOW_DEFAULT=http://mlflow:5001
+      - MLFLOW_TRACKING_URI=http://mlflow:5001
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+    depends_on:
+      - postgres
+      - minio
+      - mlflow
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - airflow
+
+  minio:
+    image: minio/minio:latest
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - airflow
+
+  mc:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; do
+        echo 'Waiting for MinIO...'
+        sleep 3
+      done
+      mc mb local/mlflow --ignore-existing
+      mc mb local/features --ignore-existing
+      mc mb local/models --ignore-existing
+      echo 'Buckets created successfully'
+      tail -f /dev/null
+      "
+    networks:
+      - airflow
+
+  mlflow:
+    image: python:3.10-slim
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=${MLFLOW_BACKEND_STORE_URI}
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=${MLFLOW_DEFAULT_ARTIFACT_ROOT}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+    ports:
+      - "5001:5001"
+    depends_on:
+      - postgres
+      - minio
+    command: >
+      /bin/bash -c "
+      pip install mlflow[server] psycopg2-binary boto3 &&
+      until pg_isready -h postgres -p 5432 -U ${POSTGRES_USER}; do
+        echo 'Waiting for PostgreSQL...'
+        sleep 3
+      done
+      mlflow server --host 0.0.0.0 --port 5001 --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} --default-artifact-root ${MLFLOW_DEFAULT_ARTIFACT_ROOT}
+      "
+    networks:
+      - airflow
+
+  feast:
+    image: python:3.10-slim
+    volumes:
+      - ./feature_repo:/feature_repo
+    working_dir: /feature_repo
+    command: >
+      /bin/bash -c "
+      pip install feast[aws] &&
+      tail -f /dev/null
+      "
+    networks:
+      - airflow
+
+  bentoml:
+    image: python:3.10-slim
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./bentos:/bentos
+    command: >
+      /bin/bash -c "
+      pip install bentoml &&
+      bentoml serve --host 0.0.0.0 --port 3000 || python -m http.server 3000
+      "
+    networks:
+      - airflow
+
+  jupyter:
+    image: jupyter/datascience-notebook:latest
+    environment:
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN}
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+    networks:
+      - airflow
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  airflow:
+    driver: bridge

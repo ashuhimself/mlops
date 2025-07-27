@@ -1,0 +1,87 @@
+services:
+  # Add MinIO for S3-compatible storage
+  minio:
+    image: minio/minio:latest
+    environment:
+      - MINIO_ROOT_USER=minio
+      - MINIO_ROOT_PASSWORD=minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      default:
+        aliases:
+          - minio
+
+  # MinIO client for bucket creation
+  mc:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minio minio123; do
+        echo 'Waiting for MinIO...'
+        sleep 3
+      done &&
+      mc mb local/mlflow --ignore-existing &&
+      mc mb local/features --ignore-existing &&
+      mc mb local/models --ignore-existing &&
+      echo 'Buckets created successfully' &&
+      tail -f /dev/null
+      "
+
+  # MLflow server
+  mlflow:
+    image: python:3.10-slim
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=postgresql://mlflow:mlflow@mlflow-db:5432/mlflow
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=s3://mlflow
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+    ports:
+      - "5001:5001"
+    depends_on:
+      - mlflow-db
+      - minio
+    command: >
+      /bin/bash -c "
+      pip install mlflow[server] psycopg2-binary boto3 &&
+      echo 'Waiting for PostgreSQL to be ready...' &&
+      until python -c \"import psycopg2; conn = psycopg2.connect(host='mlflow-db', port=5432, user='mlflow', password='mlflow', database='mlflow'); conn.close()\" 2>/dev/null; do
+        echo 'Waiting for PostgreSQL...'
+        sleep 3
+      done &&
+      echo 'PostgreSQL is ready!' &&
+      mlflow server --host 0.0.0.0 --port 5001 --backend-store-uri postgresql://mlflow:mlflow@mlflow-db:5432/mlflow --default-artifact-root s3://mlflow
+      "
+
+  # Separate PostgreSQL for MLflow
+  mlflow-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=mlflow
+      - POSTGRES_PASSWORD=mlflow
+      - POSTGRES_DB=mlflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - mlflow_postgres_data:/var/lib/postgresql/data
+
+  # Jupyter Lab
+  jupyter:
+    image: jupyter/datascience-notebook:latest
+    environment:
+      - JUPYTER_TOKEN=local_dev_token
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+
+volumes:
+  minio_data:
+  mlflow_postgres_data: 
