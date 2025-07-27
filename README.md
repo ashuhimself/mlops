@@ -63,8 +63,14 @@ This script will:
 ```
 mlops/
 ├── dags/                     # Airflow DAG definitions
-│   ├── test_minio_connection.py
-│   └── data_pipeline_example.py
+│   ├── mlops/               # Core MLOps pipelines
+│   │   ├── batch_prediction_dag.py    # Batch prediction pipeline
+│   │   ├── data_prep.py               # Data preparation pipeline
+│   │   └── model_train.py             # Model training pipeline
+│   └── utility/             # Utility and test DAGs
+│       ├── data_pipeline_example.py   # Example data pipeline
+│       ├── test_minio_connection.py   # MinIO connection test
+│       └── train_register_demo.py     # Training and registration demo
 ├── notebooks/                # Jupyter notebooks
 │   └── 01_test_s3_connection.ipynb
 ├── feature_repo/            # Feast feature store configuration
@@ -82,6 +88,24 @@ mlops/
 ├── requirements.txt         # Python dependencies
 └── Dockerfile              # Custom Airflow image
 ```
+
+## 📂 DAG Organization
+
+The DAGs are organized into two main categories:
+
+### `dags/mlops/` - Core MLOps Pipelines
+Production-ready workflows for ML operations:
+- **`batch_prediction_dag.py`** - Handles batch prediction workflows
+- **`data_prep.py`** - Data preparation and preprocessing pipeline
+- **`model_train.py`** - Model training and validation pipeline
+
+### `dags/utility/` - Utility and Test DAGs
+Development, testing, and example workflows:
+- **`data_pipeline_example.py`** - Example data processing pipeline
+- **`test_minio_connection.py`** - MinIO/S3 connection testing
+- **`train_register_demo.py`** - Training and model registration demonstration
+
+This organization helps maintain clear separation between production workflows and development/testing utilities.
 
 ## 🔧 Configuration Details
 
@@ -190,7 +214,12 @@ with mlflow.start_run():
 
 ### 4. Creating a DAG
 
-Create a new file in `dags/` directory:
+Create a new file in the appropriate `dags/` subdirectory:
+
+- **Core MLOps pipelines**: Place in `dags/mlops/` for production workflows
+- **Utility/test DAGs**: Place in `dags/utility/` for examples and testing
+
+Example DAG (`dags/mlops/my_first_dag.py`):
 
 ```python
 from datetime import datetime, timedelta
@@ -224,8 +253,8 @@ with DAG(
 
 ### 1. Test MinIO Connection
 ```bash
-# From Airflow UI, trigger the DAG:
-test_minio_mlflow_connections
+# From Airflow UI, trigger the test DAG located in dags/utility/:
+test_minio_connection
 ```
 
 ### 2. Test from Jupyter
